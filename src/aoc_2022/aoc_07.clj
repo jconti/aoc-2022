@@ -17,16 +17,33 @@
     (and (= p1 "$") (= p2 "cd") (not= p3 ".."))
     (update state :path conj p3)
 
-    ;; cd to parent dir, add sub-dir's size into parent
+    ;; cd to parent dir
     (and (= p1 "$") (= p2 "cd") (= p3 ".."))
-    (-> state (update-in [:sizes (pop path)] #(+ (or % 0) (sizes path))) (update :path pop))
+    (update state :path pop)
 
-    ;; accumulate dir size
+    ;; accumulate names of dirs, initialize size
+    (= p1 "dir")
+    (update-in state (concat [:sizes] path [p2]) #(or % {:size 0}))
+
+    ;; add file size into directory
     (re-find #"^\d+$" p1)
-    (update-in state [:sizes path] #(+ (or % 0) (edn/read-string p1)))
+    (update-in state (concat [:sizes] path [:size]) #(+ (or % 0) (edn/read-string p1)))
 
-    ;; other commands un-needed
     :else state))
+
+(defn compute-sizes
+  [sizes-map]
+  (reduce-kv (fn [m k v]
+               (if (= k :size)
+                 m
+                 (let [{sz :size :as sm} (compute-sizes v)]
+                   (-> m (assoc k sm) (update :size + sz)))))
+             sizes-map
+             sizes-map))
+
+(defn size-seq
+  [{:keys [size] :as sizes-map}]
+  (cons size (mapcat (comp size-seq second) (dissoc sizes-map :size))))
 
 (def base-state {:path [] :sizes {}})
 
@@ -36,29 +53,30 @@
        common/read-input
        (map #(str/split % #"\s+"))))
 
-;; (take 5 data)
-;; => (["$" "cd" "/"] ["$" "ls"] ["dir" "ctd"] ["80649" "mwcj.pmh"] ["212527" "nbb.ztq"])
-
 (def result-state
-  (reduce apply-input base-state data))
+  (update
+   (reduce apply-input base-state data)
+   :sizes
+   compute-sizes))
 
 (def part-1
   "Value is `1427048`"
   (->> result-state
        (:sizes)
-       (vals)
+       (size-seq)
        (filter #(<= % 100000))
        (reduce +)))
 
 (def part-2
+  "Value is `2940614`"
   (let [disk-space 70000000
         needed-space 30000000
-        free-space (- disk-space (-> result-state :sizes (get [])))
+        used-space (-> result-state :sizes :size)
+        free-space (- disk-space used-space)
         min-to-delete (- needed-space free-space)]
-    #p free-space
-    #p min-to-delete
-    #_(->> result-state
-           :sizes
-           vals
-           sort
-           #_(drop-while (partial < min-to-delete)))))
+    (->> result-state
+         :sizes
+         size-seq
+         sort
+         (drop-while (partial > min-to-delete))
+         first)))
